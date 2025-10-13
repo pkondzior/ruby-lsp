@@ -198,13 +198,14 @@ module RubyIndexer
     #: (String? query) -> Array[Entry]
     def fuzzy_search(query)
       unless query
-        entries = @entries.filter_map do |_name, entries|
+        entries = @entries.values.filter_map do |entries|
           next if entries.first.is_a?(Entry::SingletonClass)
 
           entries
         end
-
-        return entries.flatten
+        return entries.flat_map do |entries|
+          skip_unresolved_entries(entries)
+        end
       end
 
       normalized_query = query.gsub("::", "").downcase
@@ -216,7 +217,9 @@ module RubyIndexer
         [entries, -similarity] if similarity > ENTRY_SIMILARITY_THRESHOLD
       end
       results.sort_by!(&:last)
-      results.flat_map(&:first)
+      results.flat_map do |entries, _similarity|
+        skip_unresolved_entries(entries)
+      end
     end
 
     #: (String? name, String receiver_name) -> Array[(Entry::Member | Entry::MethodAlias)]
@@ -1053,6 +1056,34 @@ module RubyIndexer
       original_entries.delete(entry)
       original_entries << resolved_alias
       resolved_alias
+    end
+
+    # Attempts to resolve an entry if it is an unresolved constant or method alias.
+    # Returns the resolved entry, or nil if it cannot be resolved.
+    #: (Entry) -> Entry?
+    def resolve_entry(entry)
+      resolved_entry = case entry
+      when Entry::UnresolvedConstantAlias
+        resolve_alias(entry, [])
+      when Entry::UnresolvedMethodAlias
+        resolve_method_alias(entry, entry.owner&.name || "", [])
+      else
+        entry
+      end
+      resolved_entry unless resolved_entry.is_a?(Entry::UnresolvedConstantAlias) || resolved_entry.is_a?(Entry::UnresolvedMethodAlias)
+    end
+
+    # Filters and resolves entries, skipping those that remain unresolved.
+    # Returns an array of successfully resolved entries.
+    #: (Array[Entry]) -> Array[Entry?]
+    def skip_unresolved_entries(entries)
+      entries.filter_map do |entry|
+        entry = resolve_entry(entry)
+
+        next unless entry
+
+        entry
+      end
     end
   end
 end
